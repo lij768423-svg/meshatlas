@@ -621,7 +621,7 @@ class Atlas:
     def api_state(self):
         with self.lock:
             nodes = {}
-            for nid, n in self.nodes.items():
+            for nid in self.nodes:
                 r = self.results.get(nid) or {}
                 data = r.get("data") or {}
                 p = self.ts_peers.get(nid)
