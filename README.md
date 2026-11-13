@@ -144,6 +144,10 @@ meshatlas demo        # UI with generated data; edit files in src/meshatlas/web 
 
 The front end is plain JavaScript (D3 for the map) with no build step. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Friendly links
+
+- [LINUX DO — 新的理想型社区](https://linux.do)
+
 ## License
 
 MIT. Bundled D3, topojson-client and world-atlas data are ISC licensed — see [NOTICE.md](NOTICE.md).

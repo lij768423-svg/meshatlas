@@ -129,6 +129,10 @@ meshatlas demo        # 用生成的数据跑界面；改 src/meshatlas/web 里�
 
 前端是原生 JavaScript（地图用 D3），没有构建步骤。见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+## 友情链接
+
+- [LINUX DO - 新的理想型社区](https://linux.do)
+
 ## 许可证
 
 MIT。内置的 D3、topojson-client 和 world-atlas 数据是 ISC 许可，见 [NOTICE.md](NOTICE.md)。
