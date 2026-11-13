@@ -123,7 +123,7 @@ const ZH = {
   "Copy link": "复制链接", "History range": "历史范围", "last {n} attempts failed": "最近 {n} 次失败",
   "public ping from {src}": "公网 ping（从 {src}）", "not collected": "不采集", "offline": "离线", "HIDDEN": "已隐藏",
   "24h ago": "24h 前", "12h ago": "12h 前", "now": "现在", "Collecting (one sample per node round)": "还在累积（每轮采集记一次）",
-  "No alerts": "没有告警",
+  "No alerts": "没有告警", "Show it in the panel below": "在下方面板中查看", "Open the detail page there": "打开详情页并定位到这里",
   "No notes. Add them with notes = [...] under [nodes.{id}] in meshatlas.toml.": "没有备注。在 meshatlas.toml 的 [nodes.{id}] 下用 notes = [...] 添加。",
   "Last collected": "最后采集", "All detail modules are off. Turn some on in settings (,).": "详情页的模块都关掉了，在设置（,）里打开。",
   "this node is the hub": "本机就是中心节点", "not measured": "没有测量", "Tailscale status": "Tailscale 在线状态",

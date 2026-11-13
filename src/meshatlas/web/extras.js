@@ -43,7 +43,7 @@ function renderIssues() {
   $("issues").innerHTML = `
     <div class="iss-h"><span>ISSUES · ${list.length}</span><button class="ib" type="button" data-close aria-label="${t("Close")}">×</button></div>
     ${list.length ? list.map((i) => i.node
-      ? `<button class="iss" type="button" data-issue-node="${esc(i.node)}"><span class="sq ${i.level === "bad" ? "bad" : "warn"}"></span><span class="iss-n">${esc(i.node)}</span><span class="iss-t">${esc(i.text)}</span><span class="iss-go">${t("Details")} ↗</span></button>`
+      ? `<button class="iss" type="button" data-issue-node="${esc(i.node)}"${i.focus ? ` data-issue-focus="${esc(JSON.stringify(i.focus))}"` : ""}><span class="sq ${i.level === "bad" ? "bad" : "warn"}"></span><span class="iss-n">${esc(i.node)}</span><span class="iss-t">${esc(i.text)}</span><span class="iss-go">${t("Details")} ↗</span></button>`
       : `<div class="iss"><span class="sq warn"></span><span class="iss-n">${t("Collector")}</span><span class="iss-t">${esc(i.text)}</span><span></span></div>`).join("")
       : `<div class="iss-ok">${t("All clear, nothing to report.")}</div>`}`;
 }

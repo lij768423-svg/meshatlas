@@ -101,28 +101,30 @@ function nodeStatus(id) {
     if (probes.length) online = probes.some((e) => e.ms != null);
   }
   const issues = [];
-  if (cfg.inTailnet && online === false && cfg.kind === "linux") issues.push(t("{id} is offline (Tailscale)", { id }));
-  if (!cfg.inTailnet && !cfg.collected && online === false) issues.push(t("{id}: public ping unreachable (from {src})", { id, src: pingsTo(id).map((e) => e.src).join(", ") }));
-  if (n.collect && n.collect.ok === false && (n.collect.fails || 1) >= 2) issues.push(t("{id}: collection failed {n} times in a row: {err}", { id, n: n.collect.fails, err: n.collect.error }));
+  const goto = [];                         // goto[i]: where issue i lands on the detail page (a pageFocus, or null)
+  const add = (text, to = null) => { issues.push(text); goto.push(to); };
+  if (cfg.inTailnet && online === false && cfg.kind === "linux") add(t("{id} is offline (Tailscale)", { id }));
+  if (!cfg.inTailnet && !cfg.collected && online === false) add(t("{id}: public ping unreachable (from {src})", { id, src: pingsTo(id).map((e) => e.src).join(", ") }));
+  if (n.collect && n.collect.ok === false && (n.collect.fails || 1) >= 2) add(t("{id}: collection failed {n} times in a row: {err}", { id, n: n.collect.fails, err: n.collect.error }));
   const failed = (n.services || []).filter((u) => u.active === "failed");
-  if (failed.length) issues.push(t("{id}: {n} systemd unit(s) failed", { id, n: failed.length }));
+  if (failed.length) add(t("{id}: {n} systemd unit(s) failed", { id, n: failed.length }), { svc: failed.map((u) => `${id}/${u.scope}/${u.unit}`) });
   const cs = (n.docker && n.docker.containers) || [];
   const bad = cs.filter((c) => c.health === "unhealthy" || c.state === "restarting" || c.state === "dead");
-  if (bad.length) issues.push(t("{id}: {n} unhealthy container(s)", { id, n: bad.length }));
+  if (bad.length) add(t("{id}: {n} unhealthy container(s)", { id, n: bad.length }), { ctr: bad.map((c) => `${id}/${c.name}`) });
   const kdown = (n.kuma || []).filter((m) => m.status === "down");
-  if (kdown.length) issues.push(t("{id}: {n} Kuma monitor(s) DOWN: {names}", { id, n: kdown.length, names: kdown.map((m) => m.name).slice(0, 3).join(", ") }));
+  if (kdown.length) add(t("{id}: {n} Kuma monitor(s) DOWN: {names}", { id, n: kdown.length, names: kdown.map((m) => m.name).slice(0, 3).join(", ") }), { kuma: true });
   const level = online === false ? "off" : issues.length ? "warn" : online === null && !n.collect ? "idle" : "on";
-  return { online, issues, level, failed, badCtr: bad };
+  return { online, issues, goto, level, failed, badCtr: bad };
 }
 const sqClass = (level) => ({ on: "on", off: "off", warn: "warn", bad: "bad", idle: "idle" }[level] || "idle");
 
 /* ---------- top bar ---------- */
-/** All current issues: {node, text, level}. node is null for problems of the collector itself. */
+/** All current issues: {node, text, level, focus}. node is null for problems of the collector itself. */
 function computeIssues() {
   const out = [];
   for (const n of cfgNodes()) {
     const st = nodeStatus(n.id);
-    for (const t of st.issues) out.push({ node: n.id, text: t, level: st.online === false ? "bad" : "warn" });
+    st.issues.forEach((text, i) => out.push({ node: n.id, text, level: st.online === false ? "bad" : "warn", focus: st.goto[i] }));
   }
   if (S.latency.error) out.push({ node: null, text: S.latency.error, level: "warn" });
   if (S.tailscale.error) out.push({ node: null, text: "Tailscale：" + S.tailscale.error, level: "warn" });
@@ -841,9 +843,12 @@ function renderDetail(force = false) {
 }
 
 function tabOverview(cfg, n, st, loc) {
-  const notes = [...st.issues.map((t) => ({ t, err: true })), ...(cfg.notes || []).map((t) => ({ t, err: false }))];
+  const notes = [...st.issues.map((t, i) => ({ t, err: true, to: st.goto[i] })), ...(cfg.notes || []).map((t) => ({ t, err: false }))];
   const kv = overviewKV(cfg, n, loc);
-  return `${notes.length ? `<div class="notes">${notes.map((x) => `<div class="note ${x.err ? "err" : ""}">${esc(x.t)}</div>`).join("")}</div>` : ""}
+  const note = (x) => x.to
+    ? `<button type="button" class="note err go" data-focus="${esc(JSON.stringify(x.to))}" title="${t("Open the detail page there")}">${esc(x.t)}<span class="al-go">→</span></button>`
+    : `<div class="note ${x.err ? "err" : ""}">${esc(x.t)}</div>`;
+  return `${notes.length ? `<div class="notes">${notes.map(note).join("")}</div>` : ""}
     <dl class="kv">${kv.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
     <div class="sec-t"><span>CPU / MEM · ${t("history")}</span><span>${hist.data && hist.node === sel ? t("{n} points", { n: hist.data.cpu.length }) : ""}</span></div>
     <svg class="mini-chart" id="mini-chart"></svg>`;
@@ -1327,7 +1332,7 @@ document.addEventListener("click", (ev) => {
   if (t.closest("[data-close]")) return closeOverlays();
   if (t.classList.contains("overlay")) return closeOverlays();
   const iss = t.closest("[data-issue-node]");
-  if (iss) return openNode(iss.dataset.issueNode);
+  if (iss) return openNode(iss.dataset.issueNode, iss.dataset.issueFocus ? JSON.parse(iss.dataset.issueFocus) : null);
   if (!$("issues").hidden && !t.closest("#issues")) closeOverlays("issues-only");
   const op = t.closest("[data-open]");
   if (op) return openNode(op.dataset.open);
@@ -1336,6 +1341,8 @@ document.addEventListener("click", (ev) => {
   if (nav) return step(+nav.dataset.pnav);
   const row = t.closest(".node-row[data-id]");
   if (row) return select(row.dataset.id);
+  const fc = t.closest("[data-focus]");          // an alert: open the detail page at the failing row
+  if (fc && view === "map") return openNode(sel, JSON.parse(fc.dataset.focus));
   const evn = t.closest(".ev[data-evnode]");
   if (evn && cfgNode(evn.dataset.evnode)) return select(evn.dataset.evnode);
   const lf = t.closest("[data-logf]");

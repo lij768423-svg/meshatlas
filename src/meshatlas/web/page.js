@@ -5,7 +5,7 @@
  * Data comes from S / hist / upt that app.js already loads, plus per-node events from api/events. */
 
 const pctr = { q: "", mode: "all", sort: "state", dir: 1, group: false };   // container table filter and sort
-let pageFocus = null;     // where to land after opening: {ctr: "node/container"} | {svc: key, sys} | {kuma: true}
+let pageFocus = null;     // where to land after opening: {ctr: key | [keys]} | {svc: key | [keys], sys} | {kuma: true}
 let pev = { node: null, list: [], at: 0, lvl: "all", more: false };
 let pageSig = "";
 let ptab = store.get("ma.ptab", "ctr");          // bottom panel tab: ctr | svc | kuma | link
@@ -56,8 +56,8 @@ function renderPage(force = false) {
   const cfg = cfgNode(sel);
   if (!cfg) return;
   const n = S.nodes[sel] || {};
-  if (pageFocus?.ctr) { ptab = "ctr"; openCtr.add(pageFocus.ctr); pctr.mode = "all"; pctr.q = ""; }
-  if (pageFocus?.svc) { ptab = "svc"; openSvc.add(pageFocus.svc); if (pageFocus.sys) showSysSvc = true; }
+  if (pageFocus?.ctr) { ptab = "ctr"; openCtr.add([].concat(pageFocus.ctr)[0]); pctr.mode = "all"; pctr.q = ""; }
+  if (pageFocus?.svc) { ptab = "svc"; openSvc.add([].concat(pageFocus.svc)[0]); if (pageFocus.sys) showSysSvc = true; }
   if (pageFocus?.kuma) ptab = "kuma";
   const tabs = pageTabs(cfg, n);
   if (!tabs.some((tb) => tb[0] === ptab)) ptab = tabs[0][0];
@@ -108,16 +108,17 @@ function renderPage(force = false) {
   if (pageFocus) {
     const f = pageFocus;
     pageFocus = null;
-    hlSel = f.ctr ? `[data-ctr="${CSS.escape(f.ctr)}"]` : f.svc ? `[data-svc="${CSS.escape(f.svc)}"]` : null;
+    const rows = (attr, keys) => [].concat(keys).map((k) => `[${attr}="${CSS.escape(k)}"]`).join(",");
+    hlSel = f.ctr ? rows("data-ctr", f.ctr) : f.svc ? rows("data-svc", f.svc) : null;
     hlUntil = Date.now() + 4000;
-    const el = hlSel && page.querySelector(hlSel);
+    const el = hlSel ? page.querySelector(hlSel) : f.kuma ? page.querySelector(".ptab.on") : null;
     if (el) {
       el.scrollIntoView({ block: "center" });
       el.focus({ preventScroll: true });
     }
   }
   // highlight the row we jumped to from search for 4 s (survives auto-refresh re-renders)
-  if (hlSel && Date.now() < hlUntil) page.querySelector(hlSel)?.classList.add("hl");
+  if (hlSel && Date.now() < hlUntil) page.querySelectorAll(hlSel).forEach((el) => el.classList.add("hl"));
 }
 
 /* ---------- left dossier ---------- */
@@ -170,9 +171,12 @@ function sideHtml(cfg, n, st, loc) {
   if (showSec("alerts")) {
     html += `<section class="panel ps">
       <div class="ps-h"><span>ALERTS</span><span>${st.issues.length || ""}</span></div>
-      ${st.issues.length ? st.issues.map((txt) => {
+      ${st.issues.length ? st.issues.map((txt, i) => {
         const bad = st.online === false || /offline|unreachable|DOWN|in a row/i.test(txt);
-        return `<div class="al ${bad ? "bad" : "warn"}"><span class="sq ${bad ? "bad" : "warn"}"></span><span>${esc(txt.replace(new RegExp("^" + sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + " "), ""))}</span></div>`;
+        const body = `<span class="sq ${bad ? "bad" : "warn"}"></span><span>${esc(txt.replace(new RegExp("^" + sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[:：]\\s*"), ""))}</span>`;
+        const to = st.goto[i];
+        return to ? `<button type="button" class="al go ${bad ? "bad" : "warn"}" data-focus="${esc(JSON.stringify(to))}" title="${t("Show it in the panel below")}">${body}<span class="al-go">→</span></button>`
+          : `<div class="al ${bad ? "bad" : "warn"}">${body}</div>`;
       }).join("") : `<div class="al ok"><span class="sq on"></span><span>${t("No alerts")}</span></div>`}
     </section>`;
   }
@@ -466,6 +470,8 @@ function drawPageCharts() {
 
 /* ---------- clicks inside the detail page (app.js hands them over last) ---------- */
 function pageClick(t) {
+  const fc = t.closest("[data-focus]");
+  if (fc) { pageFocus = JSON.parse(fc.dataset.focus); renderPage(true); return true; }
   const tb = t.closest("[data-ptab]");
   if (tb) { ptab = tb.dataset.ptab; store.set("ma.ptab", ptab); renderPage(true); $("pg-tbl") && ($("pg-tbl").scrollTop = 0); return true; }
   const pc = t.closest("[data-pchart]");
