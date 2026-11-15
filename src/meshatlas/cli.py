@@ -31,6 +31,17 @@ def resolve_host(host):
     return "127.0.0.1"
 
 
+def local_url(host, port, path="/healthz"):
+    """A URL this machine can use to reach a server listening on (host, port)."""
+    if host in ("", "0.0.0.0"):
+        host = "127.0.0.1"
+    elif host == "::":
+        host = "::1"
+    if ":" in host:
+        host = f"[{host}]"
+    return f"http://{host}:{port}{path}"
+
+
 def cmd_run(args):
     from .core import Atlas
     from .server import make_handler, serve
@@ -52,6 +63,11 @@ def cmd_run(args):
     atlas = Atlas(cfg, data_dir)
     atlas.start()
     httpd = serve(host, port, make_handler(atlas, token=token))
+    port = httpd.server_address[1]
+    try:  # where we really listen, for the Docker HEALTHCHECK (it cannot see `--host auto` or `--port`)
+        (data_dir / "healthz-url").write_text(local_url(host, port) + "\n")
+    except OSError:
+        pass
     shown = host if host not in ("0.0.0.0", "::") else "<this machine>"
     print(f"MeshAtlas {__version__} · http://{shown}:{port}/" + ("?token=…" if token else ""), flush=True)
     print(f"  config: {path or 'none (auto-discovery)'} · data: {data_dir}", flush=True)
