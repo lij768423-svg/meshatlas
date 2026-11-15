@@ -41,32 +41,50 @@ memory and disks of each host. It is one Python process with **zero dependencies
 
 ## Quick start
 
-```bash
-# try it without a tailnet: the UI with generated data
-uvx meshatlas demo            # then open http://127.0.0.1:8765
+**Just looking?** Open the [**live demo**](https://lij768423-svg.github.io/meshatlas/). It runs in your browser
+with generated data; nothing to install.
 
-# on any machine in your tailnet
-uvx meshatlas                 # or: pipx install meshatlas && meshatlas
+> MeshAtlas is **not on PyPI yet**, so `pip install meshatlas` and `uvx meshatlas` do not work. Until the first
+> release, run it from the repository:
+
+**From a checkout** — no install, no dependencies (Python 3.11+; on 3.9/3.10 also `pip install tomli` if you
+use a `.toml` config):
+
+```bash
+git clone https://github.com/lij768423-svg/meshatlas && cd meshatlas
+PYTHONPATH=src python3 -m meshatlas demo   # generated data, no tailnet needed; open http://127.0.0.1:8765
+PYTHONPATH=src python3 -m meshatlas        # the real thing, on any machine in your tailnet
+```
+
+**Or install straight from GitHub** with [uv](https://docs.astral.sh/uv/) or pipx:
+
+```bash
+uvx --from git+https://github.com/lij768423-svg/meshatlas meshatlas demo
+pipx install git+https://github.com/lij768423-svg/meshatlas && meshatlas
 ```
 
 MeshAtlas listens on this machine's Tailscale IP (port 8765), so the page is reachable from every device in the
-tailnet and from nowhere else. Run `meshatlas check` if something looks off.
+tailnet and from nowhere else. If something looks off, run the `check` command
+(`meshatlas check`, or `PYTHONPATH=src python3 -m meshatlas check` in a checkout).
 
 ### Docker
 
+There is no published image yet; build one from the checkout (Linux host):
+
 ```bash
+docker build -t meshatlas .
 docker run -d --name meshatlas --network host --restart unless-stopped \
   -v /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock \
   -v meshatlas-data:/data \
-  ghcr.io/lij768423-svg/meshatlas run --host auto
+  meshatlas run --host auto
 ```
 
-or use [`docker-compose.yml`](docker-compose.yml). The container uses the host's `tailscaled` through its socket;
-it does not join the tailnet itself.
+or `docker compose up -d --build` with [`docker-compose.yml`](docker-compose.yml). The container uses the host's
+`tailscaled` through its socket; it does not join the tailnet itself.
 
 ### systemd
 
-`pipx install meshatlas`, then copy [`examples/meshatlas.service`](examples/meshatlas.service) to
+`pipx install git+https://github.com/lij768423-svg/meshatlas`, then copy [`examples/meshatlas.service`](examples/meshatlas.service) to
 `~/.config/systemd/user/` and `systemctl --user enable --now meshatlas`.
 
 ## Configuration

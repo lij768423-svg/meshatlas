@@ -1,5 +1,5 @@
 # systemd user service for MeshAtlas.
-#   install:  pipx install meshatlas   (or: uv tool install meshatlas)
+#   install:  pipx install git+https://github.com/lij768423-svg/meshatlas   (or: uv tool install git+https://github.com/lij768423-svg/meshatlas)
 #   copy to:  ~/.config/systemd/user/meshatlas.service
 #   enable:   systemctl --user daemon-reload && systemctl --user enable --now meshatlas
 #             loginctl enable-linger "$USER"     # keep it running after you log out

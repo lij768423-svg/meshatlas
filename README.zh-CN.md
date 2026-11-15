@@ -37,31 +37,46 @@ systemd 服务、CPU、内存和磁盘。它只是一个 Python 进程，**没�
 
 ## 快速开始
 
-```bash
-# 没有 tailnet 也能先看效果：用生成的数据跑界面
-uvx meshatlas demo            # 然后打开 http://127.0.0.1:8765
+**只想看看效果？** 直接打开[**在线演示**](https://lij768423-svg.github.io/meshatlas/)：数据在浏览器里现场生成，什么都不用装。
 
-# 在 tailnet 里的任意一台机器上
-uvx meshatlas                 # 或者：pipx install meshatlas && meshatlas
+> MeshAtlas **还没有发布到 PyPI**，所以 `pip install meshatlas`、`uvx meshatlas` 现在都装不上。
+> 正式发布之前，请从仓库运行：
+
+**从源码直接跑**：不用安装，没有依赖（Python 3.11+；3.9/3.10 如果要用 `.toml` 配置，先 `pip install tomli`）：
+
+```bash
+git clone https://github.com/lij768423-svg/meshatlas && cd meshatlas
+PYTHONPATH=src python3 -m meshatlas demo   # 生成的数据，不需要 tailnet；打开 http://127.0.0.1:8765
+PYTHONPATH=src python3 -m meshatlas        # 正式运行：在 tailnet 里的任意一台机器上
+```
+
+**或者用 [uv](https://docs.astral.sh/uv/) / pipx 直接从 GitHub 安装：**
+
+```bash
+uvx --from git+https://github.com/lij768423-svg/meshatlas meshatlas demo
+pipx install git+https://github.com/lij768423-svg/meshatlas && meshatlas
 ```
 
 MeshAtlas 默认监听本机的 Tailscale IP（端口 8765），所以 tailnet 里的设备都能打开，外网打不开。
-有问题先跑 `meshatlas check` 自检。
+有问题先跑 `check` 自检（装好的用 `meshatlas check`，源码目录里用 `PYTHONPATH=src python3 -m meshatlas check`）。
 
 ### Docker
 
+还没有发布镜像，先在源码目录里自己构建（Linux 宿主机）：
+
 ```bash
+docker build -t meshatlas .
 docker run -d --name meshatlas --network host --restart unless-stopped \
   -v /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock \
   -v meshatlas-data:/data \
-  ghcr.io/lij768423-svg/meshatlas run --host auto
+  meshatlas run --host auto
 ```
 
-也可以用 [`docker-compose.yml`](docker-compose.yml)。容器通过 socket 使用宿主机的 `tailscaled`，自己不用登录 Tailscale。
+也可以用 [`docker-compose.yml`](docker-compose.yml)：`docker compose up -d --build`。容器通过 socket 使用宿主机的 `tailscaled`，自己不用登录 Tailscale。
 
 ### systemd
 
-`pipx install meshatlas`，再把 [`examples/meshatlas.service`](examples/meshatlas.service) 复制到
+`pipx install git+https://github.com/lij768423-svg/meshatlas`，再把 [`examples/meshatlas.service`](examples/meshatlas.service) 复制到
 `~/.config/systemd/user/`，然后 `systemctl --user enable --now meshatlas`。
 
 ## 配置

@@ -3,8 +3,8 @@
 # so the page is reachable at http://<this machine's tailscale IP>:8765.
 services:
   meshatlas:
-    image: ghcr.io/lij768423-svg/meshatlas:latest
-    # build: .
+    build: .                                     # no published image yet: `docker compose up -d --build`
+    # image: ghcr.io/lij768423-svg/meshatlas:latest   # once a release is tagged
     container_name: meshatlas
     restart: unless-stopped
     network_mode: host
