@@ -809,4 +809,5 @@ button.iss:hover, button.iss:focus-visible { background: rgba(255,255,255,.04); 
 .tb-btn.lang-switch svg { width: 14px; height: 14px; fill: currentColor; flex: none; }
 .tb-btn.lang-switch span { width: 1.4em; text-align: center; }   /* "EN" and "中" get the same width */
 @media (max-width: 600px) { .tb-btn.lang-switch svg { display: none; } }   /* top-bar buttons are 32px wide there */
+.tb-btn { white-space: nowrap; flex-shrink: 0; }   /* never squeeze a top-bar button: CJK labels would break per character */
 @media (min-width: 601px) { #btn-search { margin-left: var(--tb-slack, 0px); } }   /* equalizeTopBar() in i18n.js */
