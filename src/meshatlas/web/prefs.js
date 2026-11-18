@@ -130,6 +130,7 @@ function renderSettings() {
 
 document.addEventListener("click", (ev) => {
   const b = ev.target.closest("#drawer [data-pref][data-val]");
+  if (b && b.dataset.pref === "lang") return setLang(JSON.parse(b.dataset.val));   // i18n.js: transition + redraw
   if (b) {
     setPref(b.dataset.pref, JSON.parse(b.dataset.val));
     return renderSettings();

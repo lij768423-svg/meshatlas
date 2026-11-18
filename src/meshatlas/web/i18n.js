@@ -23,7 +23,160 @@ function applyLang() {
   document.querySelectorAll("[data-i18n-title]").forEach((el) => { el.title = t(el.dataset.i18nTitle); });
   document.querySelectorAll("[data-i18n-aria]").forEach((el) => { el.setAttribute("aria-label", t(el.dataset.i18nAria)); });
   document.querySelectorAll("[data-i18n-ph]").forEach((el) => { el.placeholder = t(el.dataset.i18nPh); });
+  updateLangButton();
+  equalizeTopBar();
 }
+
+/* ---------- switching with a decrypt transition ----------
+ * Visible text scrambles into random glyphs, the language flips while everything is scrambled, then the new text
+ * resolves character by character (620 ms; same timing and glyph set as the language switch on ljj.world).
+ * The flip itself is synchronous: nothing unscrambled is painted between the two halves. */
+const SCRAMBLABLE = /[\p{L}\p{N}㐀-鿿]/u;
+const GLYPHS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#@%+";
+const LANG_ANIM_MS = 620;
+// Not scrambled: aria-live regions (a screen reader would read the glyphs out) and the focused control (its name
+// would change every frame).
+const LANG_ANIM_SKIP = "[data-no-translate], [aria-live], script, style, noscript, canvas, textarea";
+let langAnim = null;   // { raf } while a transition runs
+
+function scrambleText(value, amount, reveal = false) {
+  const chars = Array.from(value);
+  const idx = [];
+  chars.forEach((c, i) => { if (SCRAMBLABLE.test(c)) idx.push(i); });
+  const affected = Math.round(idx.length * Math.min(1, Math.max(0, amount)));
+  idx.forEach((ci, order) => {
+    if (reveal ? order >= affected : order < affected) chars[ci] = GLYPHS[Math.floor(Math.random() * GLYPHS.length)];
+  });
+  return chars.join("");
+}
+
+/** Text nodes inside the viewport; hidden or scrolled-away text just switches. */
+function visibleTextNodes() {
+  const out = [];
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const focused = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement && !n.parentElement.closest(LANG_ANIM_SKIP) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
+  });
+  while (walker.nextNode()) {
+    const n = walker.currentNode;
+    if (!SCRAMBLABLE.test(n.nodeValue)) continue;
+    const p = n.parentElement;
+    if (focused && focused.contains(p)) continue;
+    if (!p.getClientRects().length) continue;
+    const r = p.getBoundingClientRect();
+    if (r.bottom >= 0 && r.top <= vh && r.right >= 0 && r.left <= vw) out.push(n);
+  }
+  return out;
+}
+
+/** Redraw everything in the current language, synchronously (applyPrefs defers the map to the next frame). */
+function rerenderForLang() {
+  hideTip();
+  tickClock();
+  // The drawer and the palette work without data (API offline, first poll pending), so redraw them before the S check.
+  if (!$("drawer").hidden) {
+    const a = document.activeElement, keep = a && a.closest && a.closest("#drawer") && a.dataset.pref ? [a.dataset.pref, a.dataset.val] : null;
+    renderSettings();
+    if (keep) [...document.querySelectorAll("#drawer [data-pref]")].find((b) => b.dataset.pref === keep[0] && b.dataset.val === keep[1])?.focus();
+  }
+  if (!$("palette").hidden) renderPalette();
+  relangLog();   // in place, also while the detail page hides the log
+  if (!S) return;
+  $("node-list").dataset.sig = "";
+  M.sig = "";
+  if (view === "map") {
+    layoutMap();
+    renderAll(true);
+    renderTimeline();
+  } else renderAll(true);
+  if (!$("issues").hidden) renderIssues();
+}
+
+function syncLangRadios() {
+  document.querySelectorAll('#drawer [data-pref="lang"]').forEach((b) => {
+    const on = JSON.parse(b.dataset.val) === prefs.lang;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-checked", String(on));
+  });
+}
+
+/** Set the language preference ("auto" | "en" | "zh") and switch with the transition when the language changes. */
+function setLang(value) {
+  if (langAnim) return;
+  prefs.lang = value;
+  store.set("ma.prefs", prefs);
+  syncLangRadios();
+  const next = detectLang();
+  if (next === LANG) return;
+  const log = $("log");
+  log.setAttribute("aria-busy", "true");   // hold live-region announcements while the log is re-translated
+  const swap = () => { applyLang(); try { rerenderForLang(); } catch (e) { console.error(e); } };
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    swap();
+    log.removeAttribute("aria-busy");
+    return;
+  }
+
+  const root = document.documentElement;
+  root.dataset.languageTransitioning = "true";
+  const half = LANG_ANIM_MS / 2;
+  const out = visibleTextNodes().map((node) => ({ node, from: node.nodeValue }));
+  const t0 = performance.now();
+  langAnim = {};
+
+  const stepIn = (inn, t1) => (now) => {
+    const q = Math.min(1, (now - t1) / half);
+    for (const j of inn) if (j.node.isConnected) j.node.nodeValue = q >= 1 ? j.to : scrambleText(j.to, q, true);
+    if (q < 1) { langAnim.raf = requestAnimationFrame(stepIn(inn, t1)); return; }
+    langAnim = null;
+    delete root.dataset.languageTransitioning;
+    log.removeAttribute("aria-busy");
+  };
+  const stepOut = (now) => {
+    const p = Math.min(1, (now - t0) / half);
+    const amount = Math.min(1, p / 0.8);   // scramble over the first 40% of the whole run, fully scrambled until 50%
+    for (const j of out) if (j.node.isConnected) j.node.nodeValue = scrambleText(j.from, amount);
+    if (p < 1) { langAnim.raf = requestAnimationFrame(stepOut); return; }
+    // Everything below runs in one frame, so the browser never paints unscrambled text.
+    for (const j of out) if (j.node.isConnected) j.node.nodeValue = j.from;
+    swap();
+    const inn = visibleTextNodes().map((node) => ({ node, to: node.nodeValue }));
+    for (const j of inn) j.node.nodeValue = scrambleText(j.to, 0, true);
+    langAnim.raf = requestAnimationFrame(stepIn(inn, performance.now()));
+  };
+  langAnim.raf = requestAnimationFrame(stepOut);
+}
+
+/** The top bar keeps the same width in both languages: "Search" and "搜索" differ by ~22px, which would shift every
+ *  button (including the one just clicked) after a switch. The difference goes into a spacer before the search
+ *  button (--tb-slack, used by style.css), so the buttons themselves look the same as before. */
+function equalizeTopBar() {
+  const btn = document.getElementById("btn-search"), label = btn && btn.querySelector("[data-i18n]");
+  if (!label) return;
+  const cs = getComputedStyle(label), probe = document.createElement("span");
+  probe.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;font:${cs.font};letter-spacing:${cs.letterSpacing}`;
+  document.body.appendChild(probe);
+  const width = (s) => { probe.textContent = s; return probe.getBoundingClientRect().width; };
+  const key = label.dataset.i18n, en = width(key), zh = width(ZH[key] || key);
+  probe.remove();
+  btn.style.setProperty("--tb-slack", `${Math.max(en, zh) - (LANG === "zh" ? zh : en)}px`);
+}
+
+/** An action button, not a toggle: its name says what clicking does, in the target language (lang attribute), and
+ *  contains the visible text ("EN" / "中") so voice control can find it. */
+function updateLangButton() {
+  const b = document.getElementById("btn-lang");
+  if (!b) return;
+  const toZh = LANG !== "zh";
+  b.lang = toZh ? "zh-CN" : "en";
+  b.title = toZh ? "切换为中文" : "Switch to English (EN)";
+  b.setAttribute("aria-label", b.title);
+  const s = b.querySelector("span");
+  if (s) s.textContent = toZh ? "中" : "EN";
+}
+
+document.getElementById("btn-lang")?.addEventListener("click", () => setLang(LANG === "zh" ? "en" : "zh"));
 
 const ZH = {
   // settings
@@ -167,3 +320,4 @@ const ZH = {
   "On the map: hover a location for a preview, click it for its card, double-click a node in the card for details. Detail pages have their own URL.":
     "地图上：悬停地点看预览，点击展开说明框，双击说明框里的机器打开详情页。详情页的地址可以直接收藏或分享。",
 };
+document.fonts?.ready.then(equalizeTopBar);   // measured again once web fonts are in

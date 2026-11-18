@@ -803,3 +803,10 @@ button.iss:hover, button.iss:focus-visible { background: rgba(255,255,255,.04); 
 @media (max-width: 1100px) {
   .bottom { grid-template-columns: minmax(0, 1fr); }   /* long panel headers must not widen the column */
 }
+
+/* Language switch. Icon: Phosphor "Translate" (bold, MIT, see NOTICE.md). */
+.tb-btn.lang-switch { display: inline-flex; align-items: center; gap: 6px; }
+.tb-btn.lang-switch svg { width: 14px; height: 14px; fill: currentColor; flex: none; }
+.tb-btn.lang-switch span { width: 1.4em; text-align: center; }   /* "EN" and "中" get the same width */
+@media (max-width: 600px) { .tb-btn.lang-switch svg { display: none; } }   /* top-bar buttons are 32px wide there */
+@media (min-width: 601px) { #btn-search { margin-left: var(--tb-slack, 0px); } }   /* equalizeTopBar() in i18n.js */

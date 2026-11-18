@@ -1090,6 +1090,17 @@ function evLine(e) {
   return `<span class="t">${hhmmss(e.ts)}</span><span class="k">[${esc(e.kind)}]</span><span class="m" title="${esc(e.msg)}${e.node ? "\n" + t("Click to open {id}", { id: esc(e.node) }) : ""}">${esc(e.msg)}</span>`;
 }
 
+const logEmptyText = () => (logFilter === "sel" ? t("No recent events for {id}.", { id: sel }) : t("No recent alerts."));
+const evTitle = (msg, node) => msg + (node ? "\n" + t("Click to open {id}", { id: node }) : "");
+
+/** Language switch: re-translate the log in place. Rebuilding it would make the aria-live region read the whole log
+ *  again, jump to the bottom and drop lines older than the 150 events in api/state. */
+function relangLog() {
+  const box = $("log");
+  box.querySelectorAll(".ev:not(.cursor-line) > .m").forEach((m) => { m.title = evTitle(m.textContent, m.parentElement.dataset.evnode); });
+  const empty = box.querySelector(".ev-empty");
+  if (empty) empty.textContent = logEmptyText();
+}
 function renderLog(rebuild = false) {
   const box = $("log");
   const evs = S.events || [];
@@ -1110,7 +1121,7 @@ function renderLog(rebuild = false) {
     box.appendChild(div);
   }
   if (!box.querySelector(".ev:not(.cursor-line)")) {
-    box.insertAdjacentHTML("beforeend", `<div class="ev-empty">${logFilter === "sel" ? t("No recent events for {id}.", { id: esc(sel) }) : t("No recent alerts.")}</div>`);
+    box.insertAdjacentHTML("beforeend", `<div class="ev-empty">${esc(logEmptyText())}</div>`);
   }
   while (box.childElementCount > 300) box.firstElementChild.remove();
   const cur = document.createElement("div");
