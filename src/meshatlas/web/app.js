@@ -401,7 +401,18 @@ function bezier(p0, p2, k) {
 const overlap = (a, b, pad = 4) =>
   a.x < b.x + b.w + pad && b.x < a.x + a.w + pad && a.y < b.y + b.h + pad && b.y < a.y + a.h + pad;
 
+/** Switching map modes shows or hides the proxy tools and swaps the legends, which changes the map's height. Draw,
+ *  then if the map box no longer matches what was drawn, lay out again in the same task: the browser only paints the
+ *  final state (waiting for the ResizeObserver showed one frame at the old size, then a jump). */
 function renderMap() {
+  renderMapNow();
+  if (M.settling || !S || !M.proj || view !== "map") return;
+  const r = $("map").getBoundingClientRect();
+  if (Math.max(200, Math.round(r.width)) === M.W && Math.max(160, Math.round(r.height)) === M.H) return;
+  M.settling = true;
+  try { layoutMap(); } finally { M.settling = false; }
+}
+function renderMapNow() {
   if (!S || !M.proj || view !== "map") return;
   if (mapMode === "proxy" && !proxyOn()) mapMode = "node";     // remembered from a server with [proxy]; not saved
   if (proxyFit() !== M.pxFit) return layoutMap();              // entering / leaving the proxy map changes the projection
@@ -1548,7 +1559,12 @@ const ro = new ResizeObserver(() => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     if (!S) return;
-    if (view === "map") { layoutMap(); renderTimeline(); drawMiniChart(); }
+    if (view === "map") {
+      const r = $("map").getBoundingClientRect();     // renderMap may already have laid out for this size
+      if (Math.max(200, Math.round(r.width)) !== M.W || Math.max(160, Math.round(r.height)) !== M.H) layoutMap();
+      renderTimeline();
+      drawMiniChart();
+    }
     else drawPageCharts();
   }, 120);
 });
