@@ -119,6 +119,85 @@ slug = "default"
 See [`examples/meshatlas.example.toml`](examples/meshatlas.example.toml) for every option. Display preferences
 (hidden nodes, sort order, map labels, top-bar metrics, language…) are set in the page itself and stored per browser.
 
+## Proxy view (optional)
+
+If you run [Mihomo](https://github.com/MetaCubeX/mihomo) (Clash Meta) or a Clash-based client, MeshAtlas can draw its
+routes in a **Proxy** map mode: for each entry you pick (a group or a proxy), the group's options as chains of hops —
+device → relay → exit → where the traffic lands — with the latency of each hop and the option that is probably in use.
+
+1. Make a snapshot of each config. It is a whitelist: proxy names, protocols, servers, ports, `dialer-proxy`, the
+   transport (`network`, such as `ws`) and the provider a proxy came from; group names, types, members and `use`; and
+   each provider's name, type and proxy count. Passwords, UUIDs, keys, SNI, paths and subscription URLs are never
+   written. Proxies of `proxy-providers` come from the provider's local cache file; nothing is downloaded. Run it where
+   the Mihomo config is and copy the JSON over if MeshAtlas runs on another machine.
+
+   ```bash
+   meshatlas proxy-snapshot ~/.config/mihomo/config.yaml -o ~/.config/meshatlas/proxy/laptop.json
+   ```
+
+   Only this command needs PyYAML, and it has to be in MeshAtlas's own environment:
+
+   - from a checkout: `python3 -m pip install pyyaml` (the same `python3` you run it with), then
+     `PYTHONPATH=src python3 -m meshatlas proxy-snapshot …`
+   - pipx: `pipx inject meshatlas pyyaml`
+   - uvx: `uvx --from git+https://github.com/lij768423-svg/meshatlas --with pyyaml meshatlas proxy-snapshot …`
+
+   A snapshot holds no secrets but does list your real servers, so keep it out of git: `~/.config/meshatlas/proxy/`
+   is outside any checkout, and this repository's `.gitignore` also skips `/proxy/` and `*.snapshot.json`. Snapshots
+   are read when MeshAtlas starts: after making a new one, restart it (`systemctl --user restart meshatlas`, say).
+
+2. Point the config at it:
+
+   ```toml
+   [[proxy.sources]]
+   id = "laptop"
+   label = "Laptop · Clash"
+   origin = "my-laptop"                   # the node its traffic starts from, or "hub"
+   files = ["~/.config/meshatlas/proxy/laptop.json"]   # relative paths start at the config file's directory
+   entries = [["Everything else", "PROXY"], ["AI", "AI"]]   # [label, group or proxy name]
+
+   [proxy.endpoints."203.0.113.10"]       # optional: what a server is
+   label = "Frankfurt relay"
+   loc = "fra"                            # a [locations] key or a DERP code
+   node = "vps-fra"                       # this server is that node: hops leaving it are measured there
+   role = "relay"                         # relay | residential | provider | stale
+   ```
+
+**What is measured, and from where.** A hop is timed on the machine it leaves, if MeshAtlas can run commands there.
+The first hop leaves the origin: it is measured there when the origin is the hub or has `ssh`, otherwise (a laptop,
+say) from the hub and drawn as a reference. A hop that leaves a proxy server is measured only when that server is one
+of your nodes (its endpoint sets `node`, or its address is a node's name, Tailscale IP or `[[external]]` address) and
+that node is the hub or has `ssh`. Hops leaving a provider's or anyone else's server are drawn as *not measured*; a
+route with such a hop has no total, so `url-test` leaves it out of the latency comparison. TCP protocols get a TCP
+connect time (three tries, median and loss); Hysteria, Hysteria2, TUIC and WireGuard get an ICMP ping. MeshAtlas opens
+a connection and closes it: it never speaks a proxy protocol and never reads Mihomo's config or API while running. A
+round runs every `interval` seconds (300 by default).
+
+**Which option is in use** is inferred with Mihomo's rules: `select` → the first member, `fallback` / `load-balance`
+→ the first working one, `url-test` → the fastest, so a manual choice in a `select` group may differ. A `select`
+group keeps its members in order: a member with no route (REJECT, an empty group, a name missing from the snapshot)
+stays in its place as a dead option, so a `select` group that starts with REJECT is shown as rejecting. `DIRECT` is
+a real option with no hops; proxies of type `direct` count as DIRECT, and `reject` / `dns` as REJECT. Only the first
+four members of a group (all members of a `relay` group) are drawn, measured and considered, and the page says how
+many more there are: for a `url-test` group fed by a 40-node subscription, "in use" is the fastest of the first four.
+
+**Before you turn it on:**
+
+- **DNS.** Proxy server hostnames are resolved every round by the system resolver of each measuring machine (the
+  hub and the SSH nodes that measure), so they reach whatever DNS server those machines use. With
+  `resolve_hostnames = false` under `[proxy]`, MeshAtlas resolves nothing: hops to a hostname are not measured
+  ("hostname (resolve_hostnames = false)"), hops to an IP address still are.
+- **TUN and fake-IP.** A measuring machine must not run a proxy in TUN or transparent mode itself (Mihomo, Clash,
+  sing-box…), unless the proxy servers are excluded from it. Otherwise the local TUN answers the connection: every
+  hop looks reachable in about 0 ms, dead ones too, and the probe is routed by that proxy's rules. When a hostname
+  resolves into the fake-IP range 198.18.0.0/15, MeshAtlas shows the hop as *intercepted* ("intercepted by a local
+  TUN/fake-IP proxy on …") instead of a number. A TUN that captures connections to plain IP addresses cannot be
+  detected that way; sub-millisecond times to another country are the sign.
+
+[`examples/meshatlas.example.toml`](examples/meshatlas.example.toml) also covers `resolve_hostnames`, `next` (a hop a
+server forwards to by itself; `proto` is `tcp`, `udp` or a Mihomo proxy type), `[proxy.locations]` and
+`[[proxy.regions]]`.
+
 ## How it works
 
 | What | Where it comes from |
@@ -128,17 +207,20 @@ See [`examples/meshatlas.example.toml`](examples/meshatlas.example.toml) for eve
 | Latency and path | `tailscale ping` from the hub to every online peer; with `mesh = true`, also from every SSH node |
 | Containers, units, CPU, memory, disks | a read-only Python script piped to `python3 -` over SSH (nothing is written to the remote disk) |
 | Public servers | `ping` from the hub or an SSH node |
+| Proxy hops (optional) | a probe script piped to `python3 -` on the hub or over SSH: a TCP connect to each proxy server, or `ping` for UDP protocols |
 | History | SQLite in `~/.local/state/meshatlas` (or `MESHATLAS_DATA`), kept for 7 days |
 
-The exact remote commands are in [`remote_collect.py`](src/meshatlas/remote_collect.py) and
-[`tailscale.py`](src/meshatlas/tailscale.py). See [SECURITY.md](SECURITY.md) for the security model.
+The exact remote commands are in [`remote_collect.py`](src/meshatlas/remote_collect.py),
+[`tailscale.py`](src/meshatlas/tailscale.py) and, for the proxy view, `PROBE_SCRIPT` in
+[`proxy.py`](src/meshatlas/proxy.py). See [SECURITY.md](SECURITY.md) for the security model.
 
 ## Security in one paragraph
 
 MeshAtlas only reads. It binds to the Tailscale IP by default, so tailnet ACLs decide who can open it; add
 `token = "..."` (or `MESHATLAS_TOKEN`) for a shared secret, or put it behind `tailscale serve` for HTTPS. SSH runs
 with `BatchMode=yes` using your existing keys and `~/.ssh/config`. The browser never receives SSH targets, and the
-remote collector never reads environment variables or container configs.
+remote collector never reads environment variables or container configs. With the proxy view on, the page also gets
+your proxy servers' addresses and ports.
 
 ## FAQ
 

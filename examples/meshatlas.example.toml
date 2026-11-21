@@ -36,3 +36,56 @@ probe_from = ["hub", "vps-fra"]
 # [kuma]
 # url = "http://100.64.0.1:3001"
 # slug = "default"
+
+# ---- Optional proxy view: the routes of your Mihomo / Clash instances ----
+# A hop is timed on the machine it leaves (TCP connect, or ICMP for UDP protocols), if MeshAtlas can run commands
+# there: the hub, or a node with `ssh`. Hops leaving someone else's server are not measured. See "Proxy view" in the
+# README for the details and for which PyYAML command fits your install. Make the snapshots first:
+#   meshatlas proxy-snapshot ~/.config/mihomo/config.yaml -o ~/.config/meshatlas/proxy/laptop.json
+# They hold no secrets but list your real servers: keep them out of git. They are read at startup, so restart
+# MeshAtlas after making new ones.
+#
+# Measuring machines must not run a TUN / fake-IP proxy themselves (or must exclude the proxy servers from it):
+# the local TUN would answer every connect in about 0 ms. Hostnames that resolve into 198.18.0.0/15 are shown as
+# "intercepted" instead of a number.
+#
+# [proxy]
+# interval = 300                        # seconds between measurement rounds (at least 60)
+# resolve_hostnames = true              # proxy hostnames are resolved every round by the measuring machines' system
+#                                       # DNS; false: hostname hops are not measured, IP addresses still are
+#
+# [[proxy.sources]]                     # one Mihomo / Clash instance
+# id = "laptop"
+# label = "Laptop · Clash"
+# origin = "my-laptop"                  # node its traffic starts from, or "hub"; without SSH the hub measures the
+#                                       # first hop as a reference
+# origin_label = "Laptop"
+# note = "Snapshot from 2026-11-01"
+# files = ["~/.config/meshatlas/proxy/laptop.json"]   # ~ is expanded; relative paths start at this file's directory;
+#                                                     # later files override earlier names
+# entries = [["Everything else", "PROXY"], ["AI", "AI"]]   # rows to draw: [label, group or proxy name]
+#
+# [proxy.endpoints."203.0.113.10"]      # what a proxy server is: "host" or "host:port" (host:port wins)
+# label = "Frankfurt relay"
+# loc = "fra"                           # a [locations] key, a DERP code or a [proxy.locations] key
+# node = "vps-fra"                      # this server is that node: hops leaving it are measured over its SSH
+# role = "relay"                        # relay | residential | provider | stale
+#
+# [proxy.endpoints."198.51.100.7:8443"]
+# label = "Home bridge"
+# loc = "home"
+# node = "nas"                          # without it, the `next` hop below (it leaves this server) is not measured
+# next = { host = "192.0.2.50", port = 443, label = "Residential exit", proto = "tcp" }  # a hop it forwards to itself
+#                                       # proto: "tcp" (default), "udp" or a Mihomo proxy type; udp, hysteria,
+#                                       # hysteria2, tuic and wireguard get an ICMP ping, the rest a TCP connect
+#
+# [proxy.locations.ist]                 # extra map places, same shape as [locations]
+# name = "Istanbul"
+# code = "IST"
+# lat = 41.01
+# lon = 28.98
+#
+# [[proxy.regions]]                     # provider node name -> location (HK, SG, JP, TW, KR, US, UK, DE... are built in)
+# match = "Turkey|Istanbul|土耳其"       # case-insensitive regular expression, tried before the built-in ones
+# loc = "ist"
+# label = "Turkey"

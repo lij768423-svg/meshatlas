@@ -1,4 +1,4 @@
-"""Command line: ``meshatlas [run|init|demo|check]``."""
+"""Command line: ``meshatlas [run|init|demo|check|proxy-snapshot]``."""
 
 import argparse
 import os
@@ -134,6 +134,9 @@ hide = []              # node ids to leave out
 # [kuma]
 # url = "http://kuma.example:3001"
 # slug = "default"
+
+# Optional proxy view: the routes of your Mihomo / Clash instances, every hop timed from where it leaves.
+# Make snapshots with `meshatlas proxy-snapshot`, then see [proxy] in examples/meshatlas.example.toml.
 """
 
 
@@ -210,6 +213,10 @@ def cmd_check(args):
         r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", ov["ssh"], "python3 -c 'print(1)'"],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
         line(r.returncode == 0, f"ssh {nid} ({ov['ssh']})", "python3 reachable" if r.returncode == 0 else r.stderr.strip()[-160:])
+    sources = cfg["proxy"]["sources"]
+    if sources:
+        files = sum(len(s["files"]) for s in sources)
+        line(True, "proxy view", f"{len(sources)} source(s), {files} snapshot file(s) readable")
     data_dir = Path(args.data_dir).expanduser() if args.data_dir else default_data_dir()
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -220,6 +227,31 @@ def cmd_check(args):
         line(False, "data dir", f"{data_dir}: {exc}")
     print("all good" if ok else "some checks failed")
     return 0 if ok else 1
+
+
+def cmd_proxy_snapshot(args):
+    from . import proxy_snapshot
+
+    try:
+        snap, warnings = proxy_snapshot.snapshot_file(args.mihomo_config, home=args.home)
+    except proxy_snapshot.YamlMissing as exc:
+        print(f"meshatlas: {exc}", file=sys.stderr)
+        return 2
+    except (OSError, proxy_snapshot.SnapshotError) as exc:
+        print(f"meshatlas: {exc}", file=sys.stderr)
+        return 1
+    for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
+    text = proxy_snapshot.dumps(snap)
+    if args.output in (None, "-"):
+        sys.stdout.write(text)
+        return 0
+    out = Path(args.output).expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf-8")
+    print(f"wrote {out}: {len(snap['proxies'])} proxies, {len(snap['groups'])} groups, "
+          f"{len(snap['providers'])} providers", file=sys.stderr)
+    return 0
 
 
 def main(argv=None):
@@ -243,12 +275,21 @@ def main(argv=None):
     i.add_argument("-o", "--output", default="meshatlas.toml")
     i.add_argument("--force", action="store_true")
     common(sub.add_parser("check", help="check tailscale, SSH targets and the data dir"), server=False)
+    ps = sub.add_parser("proxy-snapshot", help="extract a Mihomo / Clash config's routes for the proxy view (no secrets)",
+                        description="Write the topology of a Mihomo (Clash Meta) config as JSON for the proxy view: "
+                                    "proxy names, types, servers, ports, dialer-proxy and groups. Passwords, keys and "
+                                    "subscription URLs are never written. PyYAML is needed for proxy-snapshot: see "
+                                    "\"Proxy view (optional)\" in the README.")
+    ps.add_argument("mihomo_config", metavar="MIHOMO_CONFIG", help="the Mihomo / Clash config file (YAML)")
+    ps.add_argument("-o", "--output", help="write here instead of stdout")
+    ps.add_argument("--home", help="Mihomo's home directory, for relative provider paths (default: the config's directory)")
 
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv[0] not in ("run", "demo", "init", "check", "-h", "--help", "--version"):
+    if not argv or argv[0] not in ("run", "demo", "init", "check", "proxy-snapshot", "-h", "--help", "--version"):
         argv = ["run"] + argv   # `meshatlas --port 9000` means `meshatlas run --port 9000`
     args = ap.parse_args(argv)
-    return {"run": cmd_run, "demo": cmd_demo, "init": cmd_init, "check": cmd_check}[args.cmd](args)
+    return {"run": cmd_run, "demo": cmd_demo, "init": cmd_init, "check": cmd_check,
+            "proxy-snapshot": cmd_proxy_snapshot}[args.cmd](args)
 
 
 if __name__ == "__main__":

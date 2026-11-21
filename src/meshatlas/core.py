@@ -5,6 +5,7 @@ Everything here is read-only towards the machines being watched:
   * optional SSH collection: ``remote_collect.py`` and a ping script are piped to ``python3 -`` over SSH
   * optional ICMP ping for servers outside the tailnet
   * optional Uptime Kuma public status page
+  * optional proxy view: TCP connects / ICMP pings to the servers of Mihomo routes (see ``proxy.py``)
 """
 
 import json
@@ -23,6 +24,7 @@ from pathlib import Path
 
 from . import tailscale
 from .derp import region
+from .proxy import ProxyView
 
 HERE = Path(__file__).resolve().parent
 REMOTE_SCRIPT = (HERE / "remote_collect.py").read_bytes()
@@ -121,6 +123,12 @@ class Atlas:
         self.probe_last = {}
         self._derp, self._derp_ids, self._derp_at = {}, {}, 0
         self._nearest, self._nearest_at = None, 0
+        self.proxy = None
+        if (cfg.get("proxy") or {}).get("sources"):
+            # lambdas: look the runners up at call time (tests replace them)
+            self.proxy = ProxyView(cfg["proxy"], self._proxy_context,
+                                   lambda *a, **k: run_local(*a, **k), lambda *a, **k: self.ssh(*a, **k),
+                                   base_locations=cfg.get("locations"))
         self._load_recent_events()
 
     # ---------- events ----------
@@ -542,6 +550,16 @@ class Atlas:
                 self.kuma["error"] = short(str(exc))
             self.emit("KUMA", f"reading the Kuma status page failed: {short(str(exc))}", "error")
 
+    # ---------- proxy view (optional) ----------
+    def _proxy_context(self):
+        """The current node table, hub and known locations, read fresh by every proxy round and API call."""
+        with self.lock:
+            return dict(self.nodes), self.hub, dict(self.locations)
+
+    def api_proxy(self):
+        """The /api/proxy payload, or None when the proxy view is not configured."""
+        return self.proxy.api() if self.proxy else None
+
     # ---------- status history ----------
     def node_online(self, n):
         if n["inTailnet"]:
@@ -593,6 +611,9 @@ class Atlas:
         threading.Thread(target=self.loop, args=(self.node_round, self.col["interval"], "node round"), daemon=True).start()
         threading.Thread(target=self.loop, args=(self.latency_round, self.col["latency_interval"], "latency round"),
                          daemon=True).start()
+        if self.proxy:
+            threading.Thread(target=self.loop, args=(self.proxy.run_round, self.proxy.interval, "proxy round"),
+                             daemon=True).start()
 
     # ---------- API payloads ----------
     def public_config(self):
@@ -606,7 +627,7 @@ class Atlas:
                            "approx": bool(v.get("derp"))}
         disp = self.cfg["display"]
         return {"title": disp["title"], "subtitle": disp["subtitle"], "hub": self.hub, "locations": locs, "nodes": nodes,
-                "tailnet": self.ts_meta.get("tailnet", ""),
+                "tailnet": self.ts_meta.get("tailnet", ""), "proxy": self.proxy is not None,
                 "intervals": {"node": self.col["interval"], "latency": self.col["latency_interval"]}}
 
     def spark_for_hub(self, points=40):

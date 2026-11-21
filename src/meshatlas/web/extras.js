@@ -73,7 +73,7 @@ function openPalette() {
 function togglePalette() { $("palette").hidden ? openPalette() : closeOverlays(); }
 
 function showLocation(k) {
-  if (mapMode === "matrix") { mapMode = "node"; store.set("ma.mode", mapMode); }
+  if (mapMode === "matrix" || mapMode === "proxy") { mapMode = "node"; store.set("ma.mode", mapMode); }
   if (view === "node") { pendingLoc = k; location.hash = "#/"; } else { openLoc = null; toggleLoc(k); }
 }
 function setMapMode(m) {
@@ -119,6 +119,7 @@ function buildIndex() {
     [t("Map: links from the selected node"), "map node", () => setMapMode("node")],
     [t("Map: whole mesh"), "mesh all", () => setMapMode("mesh")],
     [t("Map: latency matrix"), "matrix table", () => setMapMode("matrix")],
+    ...(proxyOn() ? [[t("Map: proxy routes"), "proxy mihomo clash chains", () => setMapMode("proxy")]] : []),
     [t("Open details of {id}", { id: sel }), "detail page", () => openNode(sel)],
     [t("Back to the map"), "back home map", () => goMap()],
     [t("Display settings"), "settings preferences options", () => openSettings()],
@@ -259,10 +260,11 @@ function notifyEvents(evs) {
 
 /* ---------- boot ---------- */
 (async function main() {
-  // URL parameters (handy for links and screenshots): ?lang=en|zh  ?mode=node|mesh|matrix  ?q=<search>
+  // URL parameters (handy for links and screenshots): ?lang=en|zh  ?mode=node|mesh|matrix|proxy  ?q=<search>
   const qp = new URLSearchParams(location.search);
   if (["en", "zh"].includes(qp.get("lang"))) prefs.lang = qp.get("lang");     // this visit only, not saved
-  if (["node", "mesh", "matrix"].includes(qp.get("mode"))) mapMode = qp.get("mode");
+  if (["node", "mesh", "matrix", "proxy"].includes(qp.get("mode"))) mapMode = qp.get("mode");   // proxy: only if configured
+  if (window.MESHATLAS && window.MESHATLAS.demo) $("btn-gh").hidden = false;   // the demo site links to the source
   applyLang();
   ro.observe($("map"));
   ro.observe($("timeline").parentNode);

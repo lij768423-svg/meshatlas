@@ -53,8 +53,8 @@
   ];
   const byId = Object.fromEntries(NODES.map((n) => [n.id, n]));
 
-  function dist(a, b) {
-    const r = Math.PI / 180, A = LOCS[a], B = LOCS[b];
+  function dist(a, b, locs = LOCS) {
+    const r = Math.PI / 180, A = locs[a], B = locs[b];
     const h = Math.sin((B.lat - A.lat) * r / 2) ** 2 + Math.cos(A.lat * r) * Math.cos(B.lat * r) * Math.sin((B.lon - A.lon) * r / 2) ** 2;
     return 12742 * Math.asin(Math.sqrt(h));
   }
@@ -175,7 +175,7 @@
       now, startedAt: T0 - 86400 * 3,
       config: {
         title: "MESHATLAS", subtitle: "DEMO · GENERATED DATA", hub: "homelab", tailnet: "example.ts.net",
-        locations: LOCS, intervals: { node: 120, latency: 120 },
+        locations: LOCS, intervals: { node: 120, latency: 120 }, proxy: true,
         nodes: NODES.map((n) => ({ id: n.id, loc: n.loc, where: n.where, role: n.role, kind: n.kind, os: n.os || "", notes: n.id === "backup-syd" ? ["Behind CGNAT, so it is reached through DERP.", "Restic prune has been failing since the disk passed 80%."] : n.id === "status-page" ? ["Not in the tailnet: watched with ICMP from homelab and vps-fra."] : [],
           self: !!n.self, tailscaleIp: n.external ? null : n.ip, inTailnet: !n.external, collected: !(n.tailOnly || n.external), external: !!n.external, tags: n.external ? [] : ["tag:server"] })),
       },
@@ -223,6 +223,231 @@
     return { events: list.slice(0, +(q.get("limit") || 100)) };
   }
 
+  /* ---------- proxy view: two Mihomo instances and the routes their groups can take ----------
+   * Answers api/proxy in the same shape as the server. Topology -> candidate routes -> edges -> one simulated
+   * measurement round -> inferred active option, using the same rules as the real backend, so the payload is
+   * consistent by construction. Every name and address here is made up (documentation ranges only). */
+  const PX_HUB = "homelab", PX_INTERVAL = 300, PX_MAX_MEMBERS = 4, PX_MAX_DIALER = 4;
+  const PX_UDP = new Set(["hysteria2", "hysteria", "tuic", "wireguard"]);
+  const PX_LOCS = { ...LOCS,          // DERP-table locations that no demo node uses
+    hkg: { name: "Hong Kong", code: "HKG", lat: 22.32, lon: 114.17 },
+    lax: { name: "Los Angeles", code: "LAX", lat: 34.05, lon: -118.24 },
+    ord: { name: "Chicago", code: "ORD", lat: 41.88, lon: -87.63 },
+    ams: { name: "Amsterdam", code: "AMS", lat: 52.37, lon: 4.9 },
+    par: { name: "Paris", code: "PAR", lat: 48.86, lon: 2.35 },
+  };
+  // [proxy.endpoints]: "host" or "host:port" -> where it is and what it is
+  const PX_EP = {
+    "203.0.113.10": { label: "Frankfurt relay", loc: "fra", node: "vps-fra", role: "relay" },
+    "203.0.113.20": { label: "Tokyo relay", loc: "tok", node: "vps-tok", role: "relay" },
+    "203.0.113.30": { label: "New York relay", loc: "nyc", node: "vps-nyc", role: "relay" },
+    "203.0.113.30:8443": { label: "Residential bridge", loc: "nyc", node: "vps-nyc", role: "relay",
+      next: { host: "198.51.100.7", port: 1080, label: "Residential exit", proto: "socks5" } },
+    "203.0.113.40": { label: "London relay", loc: "lhr", node: "build-lhr", role: "relay" },
+    "198.51.100.7": { label: "Residential exit", loc: "ord", role: "residential" },
+    "198.51.100.20": { label: "Amsterdam relay (no SSH)", loc: "ams", role: "relay" },
+    "198.51.100.80": { label: "Provider entry", loc: "hkg", role: "provider" },
+    "192.0.2.44": { label: "Old Paris VPS", loc: "par", role: "stale" },
+  };
+  // [[proxy.regions]]: provider node name -> landing location
+  const PX_REGIONS = [[/\bHK\b|Hong Kong/i, "hkg", "Hong Kong"], [/\bSG\b|Singapore/i, "sin", "Singapore"],
+    [/\bJP\b|Japan/i, "tok", "Japan"], [/\bUS\b|United States/i, "lax", "United States"]];
+  // what `meshatlas proxy-snapshot` would have written (provider nodes come from the provider's cache file)
+  const PX_PROVIDER = ["🇭🇰 HK 01", "🇸🇬 SG 02", "🇯🇵 JP 01", "🇺🇸 US 03", "🇭🇰 HK 02", "🇸🇬 SG 01", "🇯🇵 JP 02", "🇺🇸 US 01",
+    "🇹🇼 TW 01", "🇬🇧 UK 01", "🇩🇪 DE 01", "🇰🇷 KR 01"].map((name, i) => ({
+    name, type: ["vless", "trojan", "ss"][i % 3], server: "198.51.100.80", port: 20001 + i, "dialer-proxy": "RELAY", provider: "example-sub" }));
+  const PX_BY_NAME = Object.fromEntries([
+    { name: "TOK-Hy2", type: "hysteria2", server: "203.0.113.20", port: 443 },
+    { name: "TOK-VLESS", type: "vless", server: "203.0.113.20", port: 8443 },
+    { name: "FRA-AnyTLS", type: "anytls", server: "203.0.113.10", port: 443 },
+    { name: "NYC-Trojan", type: "trojan", server: "203.0.113.30", port: 443 },
+    { name: "LHR-Trojan", type: "trojan", server: "203.0.113.40", port: 443 },
+    { name: "Residential", type: "ss", server: "203.0.113.30", port: 8443 },
+    { name: "AMS-SS", type: "ss", server: "198.51.100.20", port: 8388 },
+    { name: "FRA-via-AMS", type: "vless", server: "203.0.113.10", port: 2083, "dialer-proxy": "AMS-SS" },
+    { name: "SYD-SS", type: "ss", server: "203.0.113.60", port: 8388 },
+    { name: "PAR-Old", type: "ss", server: "192.0.2.44", port: 8388 },
+    ...PX_PROVIDER,
+  ].map((p) => [p.name, p]));
+  const PX_SOURCES = [
+    { id: "laptop", label: "Laptop · Clash Verge", origin: "macbook", originLabel: "MacBook",
+      note: "The laptop has no SSH, so hops leaving it are measured from homelab as a stand-in.",
+      groups: {
+        PROXY: { type: "url-test", proxies: ["TOK-Hy2", "FRA-AnyTLS", "NYC-Trojan", "FRA-via-AMS", "SYD-SS"] },
+        STREAM: { type: "select", proxies: PX_PROVIDER.map((p) => p.name) },   // `use: [example-sub]`, expanded
+        RELAY: { type: "select", proxies: ["TOK-VLESS", "FRA-AnyTLS"] },
+        ADBLOCK: { type: "select", proxies: ["REJECT", "DIRECT"] },
+      },
+      entries: [["Everything else", "PROXY"], ["Streaming", "STREAM"], ["Old Paris box", "PAR-Old"], ["Ads & trackers", "ADBLOCK"],
+        ["Local network", "DIRECT"]] },
+    { id: "homelab", label: "homelab · Mihomo", origin: "homelab", originLabel: "homelab",
+      note: "Containers on homelab use this instance as their HTTP proxy.",
+      groups: {
+        AI: { type: "fallback", proxies: ["LHR-Trojan", "Residential", "FRA-AnyTLS"] },
+        PROXY: { type: "url-test", proxies: ["FRA-AnyTLS", "TOK-Hy2", "NYC-Trojan"] },
+      },
+      entries: [["AI services", "AI"], ["Everything else", "PROXY"], ["Package mirrors", "DIRECT"]] },
+  ];
+  // simulated faults, by probe key: a crashed service, the stale address, and one flaky provider port
+  const PX_DOWN = new Set(["tcp|203.0.113.40|443", "tcp|192.0.2.44|8388"]);
+  const PX_LOSSY = new Set(["vps-tok|tcp|198.51.100.80|20002"]);
+
+  const pxEp = (host, port) => PX_EP[`${host}:${port}`] || PX_EP[host] || {};
+  const pxKey = (from, p) => `${from}|${p.type}|${p.server}|${p.port}`;
+  const PX_SYN = {};                  // synthetic hops added by endpoints with `next`
+  function pxTail(p) {
+    const e = PX_EP[`${p.server}:${p.port}`];
+    if (!e || !e.next) return [];
+    const nx = e.next, name = `${e.label || p.server} → ${nx.label || nx.host}`;
+    PX_SYN[name] ||= { name, type: nx.proto || "tcp", server: nx.host, port: nx.port, synthetic: true };
+    return [PX_SYN[name]];
+  }
+  /** Every route `name` can take (capped), each a list of proxies from the first hop to the last. */
+  function pxCands(src, name, depth = 0) {
+    if (depth > 6 || name.startsWith("REJECT")) return [];
+    if (name === "DIRECT") return [[]];
+    const g = src.groups[name];
+    if (g) return g.proxies.slice(0, PX_MAX_MEMBERS).flatMap((m) => pxCands(src, m, depth + 1).slice(0, PX_MAX_DIALER));
+    const p = PX_BY_NAME[name];
+    if (!p) return [];
+    if (!p["dialer-proxy"]) return [[p, ...pxTail(p)]];
+    return pxCands(src, p["dialer-proxy"], depth + 1).slice(0, PX_MAX_DIALER).map((c) => [...c, p, ...pxTail(p)]);
+  }
+  /** [node that measures a hop leaving `from`, whether it only stands in for the real start]. */
+  function pxMeasurer(from) {
+    const id = byId[from] ? from : (PX_EP[from] || {}).node;
+    const n = byId[id || ""];
+    if (!n) return [null, false];
+    if (id === PX_HUB || !(n.tailOnly || n.external)) return [id, false];
+    return byId[from] ? [PX_HUB, true] : [null, false];
+  }
+  /** Stable pseudo-noise in [0, 1) per key and measurement round. */
+  function pxNoise(key, round, i) {
+    let h = 2166136261;
+    for (const ch of `${key}|${round}|${i}`) h = Math.imul(h ^ ch.codePointAt(0), 16777619);
+    return (h >>> 0) / 4294967296;
+  }
+  /** Three samples (TCP connect or ICMP), roughly one RTT by distance, with slow drift and a little jitter. */
+  function pxProbe(who, pk, host, port, at) {
+    if (PX_DOWN.has(pk)) return [null, null, null];
+    const round = Math.floor(at / PX_INTERVAL);
+    const to = pxEp(host, port).loc || byId[who].loc;
+    const base = 2.5 + (2 * dist(byId[who].loc, to, PX_LOCS) / 200) * 1.4;
+    const level = base * (1 + 0.05 * wave(at, pxNoise(pk, 0, 0) * 6.28, 3600));
+    const s = [0, 1, 2].map((i) => Math.round((level * (1 + 0.04 * (pxNoise(`${who}|${pk}`, round, i) - 0.5)) + 0.3) * 10) / 10);
+    if (PX_LOSSY.has(`${who}|${pk}`)) s[1] = null;
+    return s;
+  }
+  const median = (xs) => { const s = [...xs].sort((a, b) => a - b), k = s.length >> 1; return s.length % 2 ? s[k] : (s[k - 1] + s[k]) / 2; };
+
+  function pxMeasure(at) {
+    const plan = {};
+    for (const src of PX_SOURCES) for (const [, name] of src.entries) for (const chain of pxCands(src, name)) {
+      let from = src.origin;
+      for (const p of chain) { plan[pxKey(from, p)] = [from, p]; from = p.server; }
+    }
+    const edges = {};
+    for (const [key, [from, p]] of Object.entries(plan)) {
+      const [who, ref] = pxMeasurer(from);
+      const r = { from, to: p.server, port: p.port, proto: p.type, method: null, measuredFrom: who, ref, ms: null, loss: null, state: "unmeasured" };
+      if (who) {
+        const m = PX_UDP.has(p.type) ? "icmp" : "tcp";
+        const samples = pxProbe(who, `${m}|${p.server}|${m === "tcp" ? p.port : ""}`, p.server, p.port, at);
+        const ok = samples.filter((x) => x != null);
+        Object.assign(r, { method: m, ms: ok.length ? Math.round(median(ok) * 10) / 10 : null,
+          loss: Math.round((1 - ok.length / samples.length) * 100) / 100,
+          state: !ok.length ? "down" : ok.length < samples.length ? "lossy" : "ok", at });
+      }
+      edges[key] = r;
+    }
+    return edges;
+  }
+
+  function pxView(src, chain, label, res) {
+    let total = 0, complete = true, ok = true, from = src.origin;
+    const hops = chain.map((p) => {
+      const key = pxKey(from, p), r = res[key] || {}, ep = pxEp(p.server, p.port);
+      if (r.state === "down" || ep.role === "stale") ok = false;
+      if (r.ms == null) complete = false;
+      else total += r.ms;
+      from = p.server;
+      return { name: p.name, proto: p.type, host: p.server, port: p.port, label: ep.label || p.server,
+        loc: ep.loc || (byId[ep.node] || {}).loc || null, node: ep.node || null, role: ep.role || null, edge: key, synthetic: !!p.synthetic };
+    });
+    const last = hops[hops.length - 1];
+    let landing;
+    if (!last) landing = { kind: "direct", label: "Direct (no proxy)", loc: byId[src.origin].loc };
+    else if (last.role === "stale") landing = { kind: "stale", label: "Old address, probably dead", loc: last.loc };
+    else if (last.role === "residential") landing = { kind: "residential", label: "Residential IP", loc: last.loc };
+    else if (last.role === "provider") {
+      const [, loc, region] = PX_REGIONS.find(([rx]) => rx.test(last.name)) || [null, null, null];
+      landing = { kind: "provider", label: `Provider · ${region || "?"}`, loc };
+      if (region) landing.region = region;
+    } else landing = { kind: "internet", label: "Internet", loc: last.loc };
+    return { label, hops, landing, ok, total: chain.length && complete ? Math.round(total * 10) / 10 : null };
+  }
+  /** Which option a group is probably using: select -> first; fallback -> first without a dead hop; url-test -> fastest. */
+  function pxPick(g, opts) {
+    if (g.type === "select") return 0;
+    const oks = opts.map((o, i) => (o.ok ? i : -1)).filter((i) => i >= 0);
+    if (!oks.length) return 0;
+    if (g.type === "url-test") {
+      const timed = oks.filter((i) => opts[i].total != null);
+      return timed.length ? timed.reduce((a, b) => (opts[b].total < opts[a].total ? b : a)) : oks[0];
+    }
+    return oks[0];
+  }
+  /** A member with no route (REJECT, or a name the snapshot lacks): it keeps its place in the group, never ok. */
+  const pxStub = (m) => ({ member: m, label: m, ok: false, total: null, hops: [],
+    landing: m.startsWith("REJECT") ? { kind: "reject", label: "Rejected (REJECT)" } : { kind: "unknown", label: "Unknown route" } });
+  /** The route `name` probably takes now. */
+  function pxBest(src, name, res, depth = 0) {
+    if (depth > 6) return null;
+    if (name === "DIRECT") return pxView(src, [], "Direct", res);
+    const g = src.groups[name];
+    if (g) {
+      const opts = g.proxies.slice(0, PX_MAX_MEMBERS).map((m) => pxBest(src, m, res, depth + 1)).filter(Boolean);
+      if (!opts.length) return null;
+      const o = opts[pxPick(g, opts)];
+      return { ...o, label: `${name} › ${o.label}` };
+    }
+    const p = PX_BY_NAME[name];
+    if (!p) return null;
+    if (!p["dialer-proxy"]) return pxView(src, [p, ...pxTail(p)], name, res);
+    const prev = pxBest(src, p["dialer-proxy"], res, depth + 1);
+    if (!prev) return null;
+    const chain = [...prev.hops.map((h) => PX_BY_NAME[h.name] || PX_SYN[h.name]), p, ...pxTail(p)];
+    return { ...pxView(src, chain, name, res), dialer: prev.label };
+  }
+
+  function proxy() {
+    const now = Date.now() / 1000;
+    // rounds every 5 minutes; the first one finished a minute before the page loaded
+    const at = T0 - 70 + Math.floor((now - (T0 - 70)) / PX_INTERVAL) * PX_INTERVAL;
+    const edges = pxMeasure(at);
+    const used = new Set();
+    const sources = PX_SOURCES.map((src) => {
+      const entries = src.entries.map(([label, name]) => {
+        const g = src.groups[name];
+        if (!g) {
+          const o = pxBest(src, name, edges);
+          const type = name === "DIRECT" ? "direct" : name.startsWith("REJECT") ? "reject" : "proxy";
+          return { label, group: name, type, options: [o ? { ...o, member: name } : pxStub(name)], active: 0, more: 0 };
+        }
+        const options = g.proxies.slice(0, PX_MAX_MEMBERS).map((m) => { const o = pxBest(src, m, edges); return o ? { ...o, member: m } : pxStub(m); });
+        return { label, group: name, type: g.type, options, active: options.length ? pxPick(g, options) : null,
+          more: Math.max(0, g.proxies.length - PX_MAX_MEMBERS) };
+      });
+      const loc = byId[src.origin].loc;
+      used.add(loc);
+      for (const en of entries) for (const o of en.options) { o.hops.forEach((h) => used.add(h.loc)); if (o.landing.loc) used.add(o.landing.loc); }
+      return { id: src.id, label: src.label, origin: src.origin, originLabel: src.originLabel, loc, note: src.note, entries };
+    });
+    const locations = Object.fromEntries([...used].filter((k) => PX_LOCS[k]).map((k) => [k, PX_LOCS[k]]));
+    return { at, elapsed: Math.round((3.6 + 1.5 * pxNoise("elapsed", Math.floor(at / PX_INTERVAL), 0)) * 10) / 10, error: null,
+      interval: PX_INTERVAL, sources, edges, locations };
+  }
+
   const realFetch = window.fetch.bind(window);
   window.fetch = async (input, init) => {
     const url = new URL(typeof input === "string" ? input : input.url, location.href);
@@ -232,7 +457,8 @@
     const body = m[1] === "state" ? state()
       : m[1] === "history" ? history(q.get("node"), +(q.get("hours") || 24))
       : m[1] === "uptime" ? uptime(+(q.get("hours") || 24), +(q.get("buckets") || 48))
-      : m[1] === "events" ? eventsFor(q) : { error: "not found" };
+      : m[1] === "events" ? eventsFor(q)
+      : m[1] === "proxy" ? proxy() : { error: "not found" };
     return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
   };
 })();

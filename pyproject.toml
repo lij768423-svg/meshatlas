@@ -28,7 +28,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "ruff>=0.5"]
+dev = ["pytest>=7", "ruff>=0.5", "pyyaml>=5"]
+proxy = ["pyyaml>=5"]                     # only for `meshatlas proxy-snapshot`; the server itself needs nothing
 
 [project.urls]
 Homepage = "https://github.com/lij768423-svg/meshatlas"

@@ -15,7 +15,7 @@ let sel = store.get("ma.sel", null);
 let tab = store.get("ma.tab", "overview");
 const ctrUi = { q: "", mode: "all", open: new Map() };
 let showSysSvc = false;
-let mapMode = store.get("ma.mode", "node");     // node: links of the selected node; mesh: all; matrix: table
+let mapMode = store.get("ma.mode", "node");     // node: links of the selected node; mesh: all; matrix: table; proxy (proxy.js)
 let openLoc = null;                 // location whose card is open on the map (all collapsed by default)
 let rangeH = store.get("ma.range", 24);
 const openCtr = new Set();
@@ -72,6 +72,8 @@ const cfgNodes = () => allNodes().filter((n) => isVis(n.id));
 const cfgNode = (id) => allNodes().find((n) => n.id === id);
 const locOf = (id) => S.config.locations[cfgNode(id)?.loc] || null;
 const hub = () => S.config.hub;
+/** The proxy view (proxy.js) only exists when the server has a [proxy] section. */
+const proxyOn = () => !!(S && S.config.proxy);
 
 function edge(src, dst) {
   return (S.latency.edges || []).find((e) => e.src === src && e.dst === dst) || null;
@@ -290,14 +292,30 @@ async function loadLand() {
   land = topojson.feature(topo, topo.objects.land);
 }
 
-/** Pick a view that fits every location: rotate to the middle of the smallest longitude span, centre on the lat range. */
-function fitView() {
-  const locs = S ? Object.values(S.config.locations) : [];
+/** Pick a view that fits the locations: rotate to the middle of the smallest longitude span, centre on the lat range.
+ *  The map is cut (lon0 ± 180°) in the middle of the largest empty arc of longitude. With `pairs` ([lonA, lonB] of the
+ *  lines drawn between places, each going the short way round) it is cut in the gap the fewest of them cross instead,
+ *  among gaps wide enough to keep places off the edge; ties keep the largest gap. */
+function fitView(locs, pairs = null) {
   if (!locs.length) return { lon0: 10, lat0: 25, spanLon: 360, spanLat: 150 };
-  const lons = locs.map((l) => ((((l.lon + 180) % 360) + 360) % 360) - 180).sort((a, b) => a - b);
-  let gap = lons[0] + 360 - lons.at(-1), gi = lons.length - 1;      // largest empty arc of longitude
-  for (let i = 0; i < lons.length - 1; i++) if (lons[i + 1] - lons[i] > gap) { gap = lons[i + 1] - lons[i]; gi = i; }
-  const start = lons[(gi + 1) % lons.length], span = 360 - gap;
+  const norm = (x) => ((((x + 180) % 360) + 360) % 360) - 180;
+  const lons = locs.map((l) => norm(l.lon)).sort((a, b) => a - b);
+  const n = lons.length;
+  // gap i: the empty arc east of lons[i]; the wrap-around one is tried first (on equal size the first one tried wins)
+  const gaps = [n - 1, ...Array.from({ length: n - 1 }, (_, i) => i)].map((i) => {
+    const size = i === n - 1 ? lons[0] + 360 - lons[i] : lons[i + 1] - lons[i];
+    return { i, size, cut: lons[i] + size / 2 };
+  });
+  const crosses = ([a, b], cut) => { const d = norm(b - a), o = norm(cut - a); return d > 0 ? o > 0 && o < d : o < 0 && o > d; };
+  const minGap = Math.min(30, Math.max(...gaps.map((g) => g.size)));
+  let best = null;
+  for (const g of gaps) {
+    if (g.size < minGap) continue;
+    g.n = pairs ? pairs.filter((p) => crosses(p, g.cut)).length : 0;
+    if (!best || g.n < best.n || (g.n === best.n && g.size > best.size)) best = g;
+  }
+  const gap = best.size, gi = best.i;
+  const start = lons[(gi + 1) % n], span = 360 - gap;
   const lats = locs.map((l) => l.lat);
   const lo = Math.min(...lats), hi = Math.max(...lats);
   return { lon0: start + span / 2, lat0: Math.max(-50, Math.min(65, (lo + hi) / 2)),
@@ -309,7 +327,10 @@ function layoutMap() {
   const r = el.getBoundingClientRect();
   M.W = Math.max(200, Math.round(r.width));
   M.H = Math.max(160, Math.round(r.height));
-  const v = fitView();
+  // the proxy map fits the places its routes pass through instead (falls back to all locations until loaded)
+  M.pxFit = proxyFit();
+  M.hot = M.pxFit ? proxyFitLocs() : S ? Object.values(S.config.locations) : [];
+  const v = fitView(M.hot, M.pxFit ? proxyFitPairs() : null);
   M.view = v;
   M.fitSig = JSON.stringify(S ? Object.values(S.config.locations).map((l) => [l.lat, l.lon]) : []);
   const pxPerDeg = Math.min(M.W / v.spanLon, M.H / v.spanLat);
@@ -319,6 +340,8 @@ function layoutMap() {
   M.sig = "";
   renderMap();
 }
+/** "" for the normal projection; in the proxy map, a signature of the places to fit (renderMap re-lays out on change). */
+const proxyFit = () => (mapMode === "proxy" && pxUi.view === "map" ? proxyFitSig() : "");
 
 function drawDots() {
   if (!land) return;
@@ -342,7 +365,7 @@ function drawDots() {
   octx.beginPath(); d3.geoPath(proj, octx)(land); octx.fillStyle = "#fff"; octx.fill();
   const img = octx.getImageData(0, 0, W, H).data;
   const step = W > 1000 ? 6 : 5;
-  const locs = S ? Object.values(S.config.locations).map((l) => proj([l.lon, l.lat])) : [];
+  const locs = (M.hot || []).map((l) => proj([l.lon, l.lat]));     // land near these places is brighter
   for (let y = step / 2; y < H; y += step) {
     for (let x = step / 2; x < W; x += step) {
       if (img[((y | 0) * W + (x | 0)) * 4 + 3] < 128) continue;
@@ -380,11 +403,21 @@ const overlap = (a, b, pad = 4) =>
 
 function renderMap() {
   if (!S || !M.proj || view !== "map") return;
-  const matrix = mapMode === "matrix";
+  if (mapMode === "proxy" && !proxyOn()) mapMode = "node";     // remembered from a server with [proxy]; not saved
+  if (proxyFit() !== M.pxFit) return layoutMap();              // entering / leaving the proxy map changes the projection
+  const pxBtn = document.querySelector('[data-mapmode="proxy"]');
+  if (pxBtn) pxBtn.hidden = !proxyOn();
+  const matrix = mapMode === "matrix", proxy = mapMode === "proxy", chain = proxy && pxUi.view === "chain";
   $("matrix").hidden = !matrix;
-  $("map-svg").style.display = $("map-dots").style.display = matrix ? "none" : "";
+  $("proxy").hidden = !chain;
+  $("px-tools").hidden = !proxy;
+  $("px-legend").hidden = !proxy;
+  $("map-legend").hidden = proxy;
+  if (!proxy) $("map-sub").removeAttribute("title");           // the proxy subtitle has a tooltip with error details
+  $("map-svg").style.display = $("map-dots").style.display = matrix || chain ? "none" : "";
   document.querySelectorAll("[data-mapmode]").forEach((b) => b.classList.toggle("on", b.dataset.mapmode === mapMode));
   if (matrix) return renderMatrix();
+  if (proxy) return renderProxy();
   const { list, reversed } = edgesFrom(sel);
   const statuses = Object.fromEntries(cfgNodes().map((n) => [n.id, nodeStatus(n.id).level]));
   const sig = JSON.stringify([M.W, M.H, sel, mapMode, openLoc, S.latency.at, statuses, prefs.hidden, prefs.arcLabels,
@@ -1319,12 +1352,15 @@ function route() {
 }
 window.addEventListener("hashchange", route);
 
-function cycleMapMode() {
-  const modes = ["node", "mesh", "matrix"];
-  mapMode = modes[(modes.indexOf(mapMode) + 1) % modes.length];
+function changeMapMode(m) {
+  mapMode = m;
   store.set("ma.mode", mapMode);
   M.sig = "";
   renderMap();
+}
+function cycleMapMode() {
+  const modes = ["node", "mesh", "matrix", ...(proxyOn() ? ["proxy"] : [])];
+  changeMapMode(modes[(modes.indexOf(mapMode) + 1) % modes.length]);
 }
 
 function step(delta) {
@@ -1372,7 +1408,7 @@ document.addEventListener("click", (ev) => {
   if (t.id === "toggle-sys") { showSysSvc = !showSysSvc; return rerenderDetail(); }
   if (t.closest("a")) return;
   const mm = t.closest("[data-mapmode]");
-  if (mm) { mapMode = mm.dataset.mapmode; store.set("ma.mode", mapMode); M.sig = ""; return renderMap(); }
+  if (mm) return changeMapMode(mm.dataset.mapmode);
   const rg = t.closest("[data-range]");
   if (rg) { rangeH = +rg.dataset.range; store.set("ma.range", rangeH); renderTimeline(); return loadHistory(true); }
   const cr = t.closest("[data-ctr]");

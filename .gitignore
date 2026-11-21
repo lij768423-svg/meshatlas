@@ -13,6 +13,9 @@ build/
 *.db-shm
 meshatlas.toml
 meshatlas.json
+# proxy-view snapshots list real proxy server addresses
+/proxy/
+*.snapshot.json
 /site/
 .DS_Store
 .claude/

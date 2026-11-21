@@ -35,5 +35,9 @@ The language switch in the top bar inlines the "Translate" icon (bold weight) fr
 > COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
 > OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+The GitHub link in the top bar of the demo site inlines the "mark-github" icon (16px) from
+[Octicons](https://github.com/primer/octicons), Copyright (c) GitHub Inc., under the MIT license (the same license
+text as above). The GitHub logo is a trademark of GitHub Inc. and is used only to link to this project's repository.
+
 "Tailscale" is a trademark of Tailscale Inc. MeshAtlas is an independent project and is not affiliated with or
 endorsed by Tailscale Inc.

@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: pip install pytest ruff
+      - run: pip install pytest ruff pyyaml       # pyyaml: the proxy-snapshot tests
       - run: ruff check src tests
       - run: python -m pytest -q
       - uses: actions/setup-node@v4

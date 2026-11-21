@@ -106,6 +106,11 @@ def make_handler(atlas=None, token="", demo=False):
                 if node not in atlas.nodes:
                     return self.send_json({"error": "unknown node"}, HTTPStatus.NOT_FOUND)
                 return self.send_json(atlas.api_history(node, num("hours", 24, 1, keep_h)))
+            if path == "/api/proxy":
+                data = atlas.api_proxy()
+                if data is None:
+                    return self.send_json({"error": "proxy view is not configured"}, HTTPStatus.NOT_FOUND)
+                return self.send_json(data)
             if path == "/api/uptime":
                 return self.send_json(atlas.api_uptime(num("hours", 24, 1, keep_h), num("buckets", 48, 6, 240)))
             if path == "/api/events":
